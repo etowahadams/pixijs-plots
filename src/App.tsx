@@ -1,14 +1,13 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import "./App.css";
-import { Plot } from "./plot";
+import { Coordinator } from "./coordinator";
 import { Data, generateRandomData } from "./utils";
 
 const plots = [
   {
-    label: "Reuse Texture",
-    description:
-      "Circles are Sprites which all use the same Texture. On zoom, the Sprites get translated.",
-    content: Plot,
+    label: "Coordinator",
+    description: "none",
+    content: Coordinator,
   },
 ];
 
@@ -26,7 +25,7 @@ function App() {
   const [numCircles, setNumCircles] = useState(4000);
   const [fps, setFps] = useState(120);
   const [isRecordingMinFps, setIsRecordingMinFps] = useState(false);
-  const plot = useRef<Plot>();
+  const plot = useRef<Coordinator>();
   const [minFps, setMinFps] = useState<number>();
   const lastFiveFps = useRef<number[]>([]);
 
@@ -36,8 +35,8 @@ function App() {
         count: numCircles,
         maxX: 4000,
         maxY: 4000,
-        startX: -2000,
-        startY: -2000,
+        startX: 0,
+        startY: 0,
         style: circleStyles[currentCircleStyle],
       }),
     [numCircles, currentCircleStyle]
@@ -73,12 +72,15 @@ function App() {
     const plotElement = document.getElementById("plot") as HTMLDivElement;
     plotElement.innerHTML = "";
     const newPlot = new plots[currentPlot].content(
-      data,
       500,
       500,
       plotElement,
       setFps
     );
+
+
+    newPlot.addPlot(data, { x: 10, y: 10, width: 480, height: 150 });
+    newPlot.addPlot(data, { x: 10, y: 170, width: 480, height: 150 });
 
     plot.current = newPlot;
     zoomLoop();
@@ -91,7 +93,7 @@ function App() {
           See on GitHub
         </a>
       </div>
-      <h1>Compare PixiJS Rendering</h1>
+      <h1>PixiJS Plots</h1>
       <div className="card">
         <p className="label">Rendering strategy:</p>
         {plots.map((plot, i) => {

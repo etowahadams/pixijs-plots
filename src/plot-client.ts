@@ -1,6 +1,6 @@
 import * as PIXI from "pixi.js";
 import { scaleLinear, type ScaleLinear } from "d3-scale";
-import { zoom, D3ZoomEvent } from "d3-zoom";
+import { D3ZoomEvent, zoom } from "d3-zoom";
 import { select } from "d3-selection";
 
 // temporary fix https://stackoverflow.com/a/54020925
@@ -8,17 +8,6 @@ import { select } from "d3-selection";
 import { transition as d3Transition } from "d3-transition";
 import { Data } from "./utils";
 select.prototype.transition = d3Transition;
-
-// Default d3 zoom feels slow so we use this instead
-// https://d3js.org/d3-zoom#zoom_wheelDelta
-function wheelDelta(event: WheelEvent) {
-  const defaultMultiplier = 5;
-  return (
-    -event.deltaY *
-    (event.deltaMode === 1 ? 0.05 : event.deltaMode ? 1 : 0.002) *
-    (event.ctrlKey ? 10 : defaultMultiplier)
-  );
-}
 
 const generateCircleTexture = (
   renderer: PIXI.IRenderer<HTMLCanvasElement>,
@@ -43,54 +32,75 @@ const generateCircleTexture = (
   return renderTexture;
 };
 
-export class Plot {
-  private app: PIXI.Application<HTMLCanvasElement>;
-  private pBase: PIXI.Graphics;
+// Default d3 zoom feels slow so we use this instead
+// https://d3js.org/d3-zoom#zoom_wheelDelta
+function wheelDelta(event: WheelEvent) {
+  const defaultMultiplier = 5;
+  return (
+    -event.deltaY *
+    (event.deltaMode === 1 ? 0.05 : event.deltaMode ? 1 : 0.002) *
+    (event.ctrlKey ? 10 : defaultMultiplier)
+  );
+}
+
+export class PlotClient {
+  private pMain: PIXI.Graphics;
+  private pBorder: PIXI.Graphics;
   private data: Data[] = [];
   private xScale: ScaleLinear<number, number> = scaleLinear();
   private yScale: ScaleLinear<number, number> = scaleLinear();
   private circles: PIXI.Sprite[] = [];
+  private renderer: PIXI.IRenderer<HTMLCanvasElement>;
+  private width: number;
+  private height: number;
 
   constructor(
     data: Data[],
-    width: number,
-    height: number,
-    container: HTMLDivElement,
-    fps: (fps: number) => void
+    size: { width: number; height: number },
+    pGraphics: PIXI.Graphics,
+    element: HTMLElement,
+    renderer: PIXI.IRenderer<HTMLCanvasElement>
   ) {
-    this.app = new PIXI.Application<HTMLCanvasElement>({
-      width,
-      height,
-      antialias: true,
-      view: document.createElement("canvas"),
-      backgroundColor: 0xffffff,
-    });
-    container.appendChild(this.app.view);
-    // This is where all the data points will be drawn
-    this.pBase = new PIXI.Graphics();
-    // Add the plot to the stage
-    this.app.stage.addChild(this.pBase);
+    this.width = size.width;
+    this.height = size.height;
+
+    // Create a graphics object to define our mask
+    const mask = new PIXI.Graphics();
+    mask.beginFill(0xffffff);
+    mask.drawRect(0, 0, this.width, this.height);
+    mask.endFill();
+    // Add container that will hold our masked content
+    const maskContainer = new PIXI.Container();
+    maskContainer.mask = mask;
+    maskContainer.addChild(mask);
+
+    this.pMain = new PIXI.Graphics();
+    this.pBorder = new PIXI.Graphics();
+    maskContainer.addChild(this.pMain);
+    maskContainer.addChild(this.pBorder);
+    pGraphics.addChild(maskContainer);
+
+
+    this.drawBorder();
+
+    this.renderer = renderer;
 
     // Attach zoom behavior to the canvas.
-    const zoomBehavior = zoom<HTMLCanvasElement, unknown>()
+    const zoomBehavior = zoom<HTMLElement, unknown>()
       .wheelDelta(wheelDelta)
       .on("zoom", this.zoomed.bind(this));
-    select<HTMLCanvasElement, unknown>(this.app.view).call(zoomBehavior);
+    select<HTMLElement, unknown>(element).call(zoomBehavior);
 
     this.data = data; // You can specify the number of points you want
     this.createCircles();
     this.drawData();
-
-    this.app.ticker.add(() => {
-      fps(this.app.ticker.FPS);
-    });
   }
 
   private createCircles(): void {
     const multiplier = 2;
     this.circles = this.data.map((point) => {
       const circleTexture = generateCircleTexture(
-        this.app.renderer,
+        this.renderer,
         point.size * multiplier,
         point.color
       );
@@ -101,7 +111,7 @@ export class Plot {
       circle.scale.set(1 / multiplier);
       circle.position.x = point.x;
       circle.position.y = point.y;
-      this.pBase.addChild(circle);
+      this.pMain.addChild(circle);
       return circle;
     });
   }
@@ -120,44 +130,21 @@ export class Plot {
     });
   }
 
-  private isPointVisisble(x: number, y: number): boolean {
-    return (
-      x >= -10 &&
-      x <= this.app.view.width &&
-      y >= -10 &&
-      y <= this.app.view.height + 10
-    );
+  private drawBorder(): void {
+    this.pBorder.clear();
+    this.pBorder.lineStyle(1, 0x000000); // Change the color to black
+    this.pBorder.drawRect(0, 0, this.width, this.height);
   }
 
-  private zoomed(event: D3ZoomEvent<HTMLCanvasElement, unknown>): void {
+  private isPointVisisble(x: number, y: number): boolean {
+    return x >= -10 && x <= this.width && y >= -10 && y <= this.height + 10;
+  }
+
+  public zoomed(event: D3ZoomEvent<HTMLElement, unknown>): void {
     const transform = event.transform;
-    this.xScale = transform.rescaleX(scaleLinear().domain([0, 1]).range([0, 1]));
-    this.yScale = transform.rescaleY(scaleLinear().domain([0, 1]).range([0, 1]));
+    this.xScale = transform.rescaleX(scaleLinear());
+    this.yScale = transform.rescaleY(scaleLinear());
     // Redraw the data using the updated scales
     this.drawData();
-  }
-
-  public scaleTo(scale: number, duration?: number): Promise<void> {
-    const zoomTime = duration || 1500;
-    const zoomBehavior = zoom<HTMLCanvasElement, unknown>()
-      .wheelDelta(wheelDelta)
-      .on("zoom", this.zoomed.bind(this));
-
-    const canvasElement = this.app.view;
-
-    select<HTMLCanvasElement, unknown>(canvasElement)
-      .transition()
-      .duration(zoomTime)
-      .call(zoomBehavior.scaleTo, scale);
-
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve();
-      }, zoomTime);
-    });
-  }
-
-  public destroy(): void {
-    this.app.destroy();
   }
 }
